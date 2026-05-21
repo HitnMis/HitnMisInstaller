@@ -1,0 +1,54 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "HitnMis Modpack Installer",
+  "version": "0.1.0",
+  "identifier": "gg.hitnmis.installer",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "HitnMis Modpack Installer",
+        "width": 900,
+        "height": 640,
+        "minWidth": 800,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true,
+        "decorations": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' ipc: http://ipc.localhost; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost https://hitnmis.gg https://www.hitnmis.gg https://mediafilez.forgecdn.net https://cdn.modrinth.com https://api.github.com"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["msi", "nsis"],
+    "publisher": "HitnMis",
+    "copyright": "Copyright © 2026 HitnMis",
+    "category": "Utility",
+    "shortDescription": "Installs Ascendancy server extras for Create: Ultimate Selection 2",
+    "longDescription": "Adds the HitnMis server-side extras (Crafting on a Stick, Quark, Supplementaries, and more) on top of an existing Create: Ultimate Selection 2 modpack install. Auto-detects CurseForge and Prism Launcher instances, downloads the current mod manifest from hitnmis.gg, and auto-cleans retired mods.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/HitnMis/HitnMisInstaller/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNDOUMxOUY1NTcwQjkyMUEKUldRYWtndFg5Um1jUEoxNVpoZHNVSlN6UTdTNVJDMk1UZkxBeU5kSzRmaTBBNVd0MHErWWVXREgK"
+    }
+  }
+}

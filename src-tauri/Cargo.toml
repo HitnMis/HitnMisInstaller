@@ -1,0 +1,39 @@
+[package]
+name = "hitnmis-installer"
+version = "0.1.0"
+description = "HitnMis Modpack Installer — adds the Ascendancy server-side extras to your Create: Ultimate Selection 2 install."
+authors = ["HitnMis"]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/HitnMis/HitnMisInstaller"
+
+[lib]
+name = "hitnmis_installer_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util"] }
+futures-util = "0.3"
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1"
+glob = "0.3"
+directories = "5"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
