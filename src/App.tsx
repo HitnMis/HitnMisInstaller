@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import heartLogo from "./assets/heart.png";
 import "./App.css";
 
 type ModEntry = { name: string; filename: string; url: string };
@@ -245,7 +246,7 @@ function Header() {
   return (
     <header className="header">
       <div className="brand">
-        <div className="brand-mark">HM</div>
+        <img src={heartLogo} alt="HitnMis" className="brand-mark" />
         <div className="brand-text">
           <div className="brand-title">HitnMis Modpack Installer</div>
           <div className="brand-sub">
