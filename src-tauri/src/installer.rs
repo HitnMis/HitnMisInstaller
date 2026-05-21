@@ -15,6 +15,38 @@ pub struct Sidecar {
     pub filenames: Vec<String>,
 }
 
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "snake_case")]
+pub enum FileStatus {
+    Ok,
+    NeedsUpdate,
+    NeedsInstall,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct ManagedRow {
+    pub name: String,
+    pub filename: String,
+    pub status: FileStatus,
+    pub expected_size: u64,
+    pub actual_size: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct UnknownJar {
+    pub filename: String,
+    pub size: u64,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct ModAudit {
+    pub managed: Vec<ManagedRow>,
+    pub will_remove_cleanup: Vec<String>,
+    pub will_remove_retired: Vec<String>,
+    pub unknown_jars: Vec<UnknownJar>,
+    pub previously_managed: Vec<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct InstallSummary {
     pub will_install: Vec<ModEntry>,
@@ -29,10 +61,11 @@ pub enum InstallProgress {
     Started { total_mods: usize },
     CleanupRemoved { filename: String },
     DownloadStart { name: String, filename: String, index: usize, total: usize },
+    DownloadSkipped { filename: String, reason: String },
     DownloadProgress { filename: String, downloaded: u64, total: u64 },
     DownloadDone { filename: String, size_bytes: u64 },
     DownloadFailed { filename: String, error: String },
-    Finished { installed: usize, removed: usize },
+    Finished { installed: usize, skipped: usize, removed: usize },
 }
 
 fn read_sidecar(mods_dir: &Path) -> Option<Sidecar> {
@@ -54,7 +87,7 @@ fn write_sidecar(mods_dir: &Path, manifest: &Manifest) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Compute what install would do without executing it.
+/// Plan the install (legacy path, kept for compat — UI now uses audit).
 pub fn plan(mods_dir: &Path, manifest: &Manifest) -> anyhow::Result<InstallSummary> {
     let previously_managed = read_sidecar(mods_dir)
         .map(|s| s.filenames)
@@ -86,10 +119,100 @@ pub fn plan(mods_dir: &Path, manifest: &Manifest) -> anyhow::Result<InstallSumma
     })
 }
 
-/// Execute the install. Calls `on_progress` for each lifecycle event.
+/// Audit the mods folder against the manifest.
+/// Categorises every manifest entry by status and lists unrelated jars in the folder.
+pub fn audit(mods_dir: &Path, manifest: &Manifest) -> anyhow::Result<ModAudit> {
+    let previously_managed = read_sidecar(mods_dir)
+        .map(|s| s.filenames)
+        .unwrap_or_default();
+
+    // Per-mod status
+    let mut managed = Vec::new();
+    for m in &manifest.mods {
+        let path = mods_dir.join(&m.filename);
+        let actual_size = std::fs::metadata(&path).ok().map(|md| md.len());
+        let status = match actual_size {
+            None => FileStatus::NeedsInstall,
+            Some(sz) if m.size > 0 && sz != m.size => FileStatus::NeedsUpdate,
+            Some(_) => FileStatus::Ok,
+        };
+        managed.push(ManagedRow {
+            name: m.name.clone(),
+            filename: m.filename.clone(),
+            status,
+            expected_size: m.size,
+            actual_size,
+        });
+    }
+
+    // Removal lists
+    let will_remove_cleanup: Vec<String> = manifest
+        .cleanup
+        .iter()
+        .filter(|f| mods_dir.join(f).exists())
+        .cloned()
+        .collect();
+
+    let current_filenames: Vec<String> =
+        manifest.mods.iter().map(|m| m.filename.clone()).collect();
+
+    let will_remove_retired: Vec<String> = previously_managed
+        .iter()
+        .filter(|f| !current_filenames.contains(f) && mods_dir.join(f).exists())
+        .cloned()
+        .collect();
+
+    // Unknown jars: any *.jar in the folder that isn't in manifest, cleanup,
+    // retired list, or sidecar.
+    let mut known: std::collections::HashSet<String> =
+        current_filenames.iter().cloned().collect();
+    for f in &manifest.cleanup {
+        known.insert(f.clone());
+    }
+    for f in &previously_managed {
+        known.insert(f.clone());
+    }
+
+    let mut unknown_jars = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(mods_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
+            if !name.to_ascii_lowercase().ends_with(".jar") {
+                continue;
+            }
+            if known.contains(name) {
+                continue;
+            }
+            let size = path.metadata().map(|m| m.len()).unwrap_or(0);
+            unknown_jars.push(UnknownJar {
+                filename: name.to_string(),
+                size,
+            });
+        }
+    }
+    unknown_jars.sort_by(|a, b| a.filename.cmp(&b.filename));
+
+    Ok(ModAudit {
+        managed,
+        will_remove_cleanup,
+        will_remove_retired,
+        unknown_jars,
+        previously_managed,
+    })
+}
+
+/// Execute the install based on user choices.
+/// `skip_filenames` — files the audit said are OK (don't re-download).
+/// `also_delete` — user-checked unknown jars to remove.
 pub async fn run<F>(
     mods_dir: &Path,
     manifest: &Manifest,
+    skip_filenames: Vec<String>,
+    also_delete: Vec<String>,
     on_progress: F,
 ) -> anyhow::Result<()>
 where
@@ -131,14 +254,38 @@ where
         }
     }
 
-    // Phase 3: download each mod from the manifest
+    // Phase 3: user-selected unknown deletions
+    for filename in &also_delete {
+        let path = mods_dir.join(filename);
+        if path.exists() {
+            std::fs::remove_file(&path)?;
+            removed_count += 1;
+            on_progress(InstallProgress::CleanupRemoved {
+                filename: filename.clone(),
+            });
+        }
+    }
+
+    // Phase 4: download each mod, skipping the ones marked OK
     let client = reqwest::Client::builder()
-        .user_agent("HitnMis-Installer/0.1")
+        .user_agent("HitnMis-Installer/0.2")
         .timeout(std::time::Duration::from_secs(120))
         .build()?;
 
+    let skip_set: std::collections::HashSet<String> = skip_filenames.into_iter().collect();
     let mut installed_count = 0;
+    let mut skipped_count = 0;
+
     for (i, m) in manifest.mods.iter().enumerate() {
+        if skip_set.contains(&m.filename) {
+            skipped_count += 1;
+            on_progress(InstallProgress::DownloadSkipped {
+                filename: m.filename.clone(),
+                reason: "already correct".into(),
+            });
+            continue;
+        }
+
         on_progress(InstallProgress::DownloadStart {
             name: m.name.clone(),
             filename: m.filename.clone(),
@@ -163,11 +310,12 @@ where
         }
     }
 
-    // Phase 4: write sidecar
+    // Phase 5: write sidecar
     write_sidecar(mods_dir, manifest)?;
 
     on_progress(InstallProgress::Finished {
         installed: installed_count,
+        skipped: skipped_count,
         removed: removed_count,
     });
     Ok(())
@@ -201,7 +349,6 @@ where
         downloaded += chunk.len() as u64;
         file.write_all(&chunk).await?;
 
-        // Throttle progress emissions to ~every 64 KB to avoid event spam
         if downloaded - last_emit > 65_536 || downloaded == total {
             on_progress(InstallProgress::DownloadProgress {
                 filename: mod_entry.filename.clone(),
@@ -215,7 +362,6 @@ where
     file.flush().await?;
     drop(file);
 
-    // Atomic-ish rename: remove the existing file first (Windows can't rename onto existing)
     if dest.exists() {
         std::fs::remove_file(&dest)?;
     }

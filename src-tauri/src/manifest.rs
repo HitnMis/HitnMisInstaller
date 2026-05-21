@@ -5,6 +5,8 @@ pub struct ModEntry {
     pub name: String,
     pub filename: String,
     pub url: String,
+    #[serde(default)]
+    pub size: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

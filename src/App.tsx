@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -6,7 +6,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import heartLogo from "./assets/heart.png";
 import "./App.css";
 
-type ModEntry = { name: string; filename: string; url: string };
+type ModEntry = { name: string; filename: string; url: string; size: number };
 type Manifest = {
   schema_version: number;
   name: string;
@@ -16,10 +16,21 @@ type Manifest = {
   mods: ModEntry[];
   notes?: string | null;
 };
-type InstallSummary = {
-  will_install: ModEntry[];
+
+type FileStatus = "ok" | "needs_update" | "needs_install";
+type ManagedRow = {
+  name: string;
+  filename: string;
+  status: FileStatus;
+  expected_size: number;
+  actual_size: number | null;
+};
+type UnknownJar = { filename: string; size: number };
+type ModAudit = {
+  managed: ManagedRow[];
   will_remove_cleanup: string[];
-  will_remove_orphaned: string[];
+  will_remove_retired: string[];
+  unknown_jars: UnknownJar[];
   previously_managed: string[];
 };
 
@@ -27,18 +38,19 @@ type ProgressEvent =
   | { kind: "started"; total_mods: number }
   | { kind: "cleanup_removed"; filename: string }
   | { kind: "download_start"; name: string; filename: string; index: number; total: number }
+  | { kind: "download_skipped"; filename: string; reason: string }
   | { kind: "download_progress"; filename: string; downloaded: number; total: number }
   | { kind: "download_done"; filename: string; size_bytes: number }
   | { kind: "download_failed"; filename: string; error: string }
-  | { kind: "finished"; installed: number; removed: number };
+  | { kind: "finished"; installed: number; skipped: number; removed: number };
 
-type Screen = "home" | "detect" | "preview" | "installing" | "done" | "error";
+type Screen = "home" | "detect" | "audit" | "installing" | "done" | "error";
 
-type ModStatus = "pending" | "downloading" | "done" | "failed";
-type ModRow = {
+type LiveRowStatus = "queued" | "skipped" | "downloading" | "done" | "failed";
+type LiveRow = {
   name: string;
   filename: string;
-  status: ModStatus;
+  status: LiveRowStatus;
   downloaded: number;
   total: number;
   error?: string;
@@ -50,13 +62,14 @@ export default function App() {
   const [screen, setScreen] = useState<Screen>("home");
   const [manifest, setManifest] = useState<Manifest | null>(null);
   const [modsDir, setModsDir] = useState<string | null>(null);
-  const [summary, setSummary] = useState<InstallSummary | null>(null);
-  const [rows, setRows] = useState<ModRow[]>([]);
+  const [audit, setAudit] = useState<ModAudit | null>(null);
+  const [selectedUnknowns, setSelectedUnknowns] = useState<Set<string>>(new Set());
+  const [rows, setRows] = useState<LiveRow[]>([]);
   const [removed, setRemoved] = useState<string[]>([]);
+  const [skippedCount, setSkippedCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // Listen for install progress from Rust backend
   useEffect(() => {
     let unlisten: UnlistenFn | null = null;
     listen<ProgressEvent>("install-progress", (e) => {
@@ -66,6 +79,14 @@ export default function App() {
           break;
         case "cleanup_removed":
           setRemoved((prev) => [...prev, ev.filename]);
+          break;
+        case "download_skipped":
+          setSkippedCount((n) => n + 1);
+          setRows((prev) =>
+            prev.map((r) =>
+              r.filename === ev.filename ? { ...r, status: "skipped" } : r
+            )
+          );
           break;
         case "download_start":
           setRows((prev) =>
@@ -87,12 +108,7 @@ export default function App() {
           setRows((prev) =>
             prev.map((r) =>
               r.filename === ev.filename
-                ? {
-                    ...r,
-                    status: "done",
-                    downloaded: ev.size_bytes,
-                    total: ev.size_bytes,
-                  }
+                ? { ...r, status: "done", downloaded: ev.size_bytes, total: ev.size_bytes }
                 : r
             )
           );
@@ -125,12 +141,10 @@ export default function App() {
       const detected = await invoke<string | null>("detect_mods_dir");
       if (detected) {
         setModsDir(detected);
-        const plan = await invoke<InstallSummary>("plan_install", {
-          modsDir: detected,
-          manifest: m,
-        });
-        setSummary(plan);
-        setScreen("preview");
+        const a = await invoke<ModAudit>("audit_mods_dir", { modsDir: detected, manifest: m });
+        setAudit(a);
+        setSelectedUnknowns(new Set());
+        setScreen("audit");
       } else {
         setScreen("detect");
       }
@@ -143,29 +157,21 @@ export default function App() {
   }
 
   async function pickFolder() {
-    const picked = await open({
-      directory: true,
-      multiple: false,
-      title: "Pick your modpack's mods/ folder",
-    });
+    const picked = await open({ directory: true, multiple: false, title: "Pick your modpack's mods/ folder" });
     if (!picked || Array.isArray(picked)) return;
     setBusy(true);
     try {
       const ok = await invoke<boolean>("validate_mods_dir", { path: picked });
       if (!ok) {
-        setError(
-          `That doesn't look like a valid mods folder. Make sure the folder is named "mods" and is inside your Create: Ultimate Selection 2 instance.`
-        );
+        setError(`That doesn't look like a valid mods folder. Make sure the folder is named "mods" and is inside your Create: Ultimate Selection 2 instance.`);
         return;
       }
       setModsDir(picked);
       if (manifest) {
-        const plan = await invoke<InstallSummary>("plan_install", {
-          modsDir: picked,
-          manifest,
-        });
-        setSummary(plan);
-        setScreen("preview");
+        const a = await invoke<ModAudit>("audit_mods_dir", { modsDir: picked, manifest });
+        setAudit(a);
+        setSelectedUnknowns(new Set());
+        setScreen("audit");
       }
     } catch (e) {
       setError(`${e}`);
@@ -174,20 +180,43 @@ export default function App() {
     }
   }
 
+  function toggleUnknown(filename: string) {
+    setSelectedUnknowns((prev) => {
+      const next = new Set(prev);
+      if (next.has(filename)) next.delete(filename);
+      else next.add(filename);
+      return next;
+    });
+  }
+
   function startInstall() {
-    if (!modsDir || !manifest) return;
+    if (!modsDir || !manifest || !audit) return;
+    const skipFilenames = audit.managed
+      .filter((r) => r.status === "ok")
+      .map((r) => r.filename);
+
     setRows(
-      manifest.mods.map((m) => ({
-        name: m.name,
-        filename: m.filename,
-        status: "pending",
-        downloaded: 0,
-        total: 0,
-      }))
+      manifest.mods.map((m) => {
+        const a = audit.managed.find((row) => row.filename === m.filename);
+        const isOk = a?.status === "ok";
+        return {
+          name: m.name,
+          filename: m.filename,
+          status: isOk ? "skipped" : "queued",
+          downloaded: isOk ? m.size : 0,
+          total: m.size,
+        };
+      })
     );
     setRemoved([]);
+    setSkippedCount(0);
     setScreen("installing");
-    invoke("run_install", { modsDir, manifest }).catch((e) => {
+    invoke("run_install", {
+      modsDir,
+      manifest,
+      skipFilenames,
+      alsoDelete: Array.from(selectedUnknowns),
+    }).catch((e) => {
       setError(`${e}`);
       setScreen("error");
     });
@@ -196,9 +225,11 @@ export default function App() {
   function resetToHome() {
     setScreen("home");
     setManifest(null);
-    setSummary(null);
+    setAudit(null);
+    setSelectedUnknowns(new Set());
     setRows([]);
     setRemoved([]);
+    setSkippedCount(0);
     setError(null);
   }
 
@@ -206,36 +237,25 @@ export default function App() {
     <div className="app">
       <Header />
       <main className="content">
-        {screen === "home" && (
-          <HomeScreen onStart={startFlow} busy={busy} />
-        )}
-        {screen === "detect" && (
-          <DetectScreen onPick={pickFolder} onRetry={startFlow} busy={busy} />
-        )}
-        {screen === "preview" && manifest && summary && modsDir && (
-          <PreviewScreen
+        {screen === "home" && <HomeScreen onStart={startFlow} busy={busy} />}
+        {screen === "detect" && <DetectScreen onPick={pickFolder} onRetry={startFlow} busy={busy} />}
+        {screen === "audit" && manifest && audit && modsDir && (
+          <AuditScreen
             manifest={manifest}
-            summary={summary}
+            audit={audit}
             modsDir={modsDir}
-            onInstall={startInstall}
+            selectedUnknowns={selectedUnknowns}
+            toggleUnknown={toggleUnknown}
+            onApply={startInstall}
             onBack={resetToHome}
             onChangeFolder={pickFolder}
           />
         )}
-        {screen === "installing" && (
-          <InstallingScreen rows={rows} removed={removed} />
-        )}
+        {screen === "installing" && <InstallingScreen rows={rows} removed={removed} skipped={skippedCount} />}
         {screen === "done" && modsDir && (
-          <DoneScreen
-            rows={rows}
-            removed={removed}
-            modsDir={modsDir}
-            onAgain={resetToHome}
-          />
+          <DoneScreen rows={rows} removed={removed} skipped={skippedCount} modsDir={modsDir} onAgain={resetToHome} />
         )}
-        {screen === "error" && (
-          <ErrorScreen message={error ?? "Unknown error"} onRetry={resetToHome} />
-        )}
+        {screen === "error" && <ErrorScreen message={error ?? "Unknown error"} onRetry={resetToHome} />}
       </main>
       <Footer />
     </div>
@@ -249,9 +269,7 @@ function Header() {
         <img src={heartLogo} alt="HitnMis" className="brand-mark" />
         <div className="brand-text">
           <div className="brand-title">HitnMis Modpack Installer</div>
-          <div className="brand-sub">
-            Ascendancy extras for Create: Ultimate Selection 2
-          </div>
+          <div className="brand-sub">Ascendancy extras for Create: Ultimate Selection 2</div>
         </div>
       </div>
     </header>
@@ -261,13 +279,8 @@ function Header() {
 function Footer() {
   return (
     <footer className="footer">
-      <span className="footer-text">v0.1.0</span>
-      <button
-        className="link-button"
-        onClick={() => openUrl("https://hitnmis.gg")}
-      >
-        hitnmis.gg
-      </button>
+      <span className="footer-text">v0.2.0</span>
+      <button className="link-button" onClick={() => openUrl("https://hitnmis.gg")}>hitnmis.gg</button>
     </footer>
   );
 }
@@ -276,84 +289,77 @@ function HomeScreen({ onStart, busy }: { onStart: () => void; busy: boolean }) {
   return (
     <div className="screen home">
       <div className="hero">
+        <img src={heartLogo} alt="" className="hero-mark" />
         <h1>Ready to install?</h1>
         <p className="lead">
-          This will add the server-side extras (Crafting on a Stick, Quark,
-          Supplementaries, Relics, JAOPCA, and more) on top of your existing{" "}
-          <strong>Create: Ultimate Selection 2</strong> install.
+          This will add the server-side extras (Crafting on a Stick, Quark, Supplementaries, Relics, JAOPCA, and more) on top of your existing <strong>Create: Ultimate Selection 2</strong> install.
         </p>
         <p className="lead muted">
-          You need the base modpack installed first (CurseForge or Prism). This
-          tool just adds the extras on top.
+          We&apos;ll scan your mods folder first and only download what&apos;s actually missing or outdated.
         </p>
       </div>
       <div className="cta">
-        <button
-          className="btn primary large"
-          onClick={onStart}
-          disabled={busy}
-        >
-          {busy ? "Loading…" : "Install / Update"}
+        <button className="btn primary large" onClick={onStart} disabled={busy}>
+          {busy ? "Scanning…" : "Scan + Install"}
         </button>
       </div>
     </div>
   );
 }
 
-function DetectScreen({
-  onPick,
-  onRetry,
-  busy,
-}: {
-  onPick: () => void;
-  onRetry: () => void;
-  busy: boolean;
-}) {
+function DetectScreen({ onPick, onRetry, busy }: { onPick: () => void; onRetry: () => void; busy: boolean }) {
   return (
     <div className="screen">
-      <h2>Couldn't find your modpack</h2>
+      <h2>Couldn&apos;t find your modpack</h2>
       <p>
-        We checked the usual CurseForge and Prism Launcher paths but didn't find
-        a <code>Create: Ultimate Selection 2</code> instance. Pick the{" "}
-        <code>mods</code> folder manually below.
+        We checked the usual CurseForge and Prism Launcher paths but didn&apos;t find a <code>Create: Ultimate Selection 2</code> instance. Pick the <code>mods</code> folder manually below.
       </p>
       <p className="muted small">
-        In your launcher, right-click the modpack instance and choose{" "}
-        <strong>Open Folder</strong>, then point us at the <code>mods</code>{" "}
-        subfolder.
+        In your launcher, right-click the modpack instance, choose <strong>Open Folder</strong>, then point us at the <code>mods</code> subfolder.
       </p>
       <div className="cta">
-        <button className="btn" onClick={onRetry} disabled={busy}>
-          Try detect again
-        </button>
-        <button className="btn primary" onClick={onPick} disabled={busy}>
-          Pick mods folder…
-        </button>
+        <button className="btn" onClick={onRetry} disabled={busy}>Try detect again</button>
+        <button className="btn primary" onClick={onPick} disabled={busy}>Pick mods folder…</button>
       </div>
     </div>
   );
 }
 
-function PreviewScreen({
-  manifest,
-  summary,
-  modsDir,
-  onInstall,
-  onBack,
-  onChangeFolder,
+function AuditScreen({
+  manifest, audit, modsDir, selectedUnknowns, toggleUnknown, onApply, onBack, onChangeFolder,
 }: {
   manifest: Manifest;
-  summary: InstallSummary;
+  audit: ModAudit;
   modsDir: string;
-  onInstall: () => void;
+  selectedUnknowns: Set<string>;
+  toggleUnknown: (filename: string) => void;
+  onApply: () => void;
   onBack: () => void;
   onChangeFolder: () => void;
 }) {
-  const totalRemove =
-    summary.will_remove_cleanup.length + summary.will_remove_orphaned.length;
+  const counts = useMemo(() => {
+    const ok = audit.managed.filter((r) => r.status === "ok").length;
+    const update = audit.managed.filter((r) => r.status === "needs_update").length;
+    const install = audit.managed.filter((r) => r.status === "needs_install").length;
+    return {
+      ok,
+      update,
+      install,
+      removeRetired: audit.will_remove_retired.length,
+      removeCleanup: audit.will_remove_cleanup.length,
+      unknown: audit.unknown_jars.length,
+    };
+  }, [audit]);
+
+  const ok = audit.managed.filter((r) => r.status === "ok");
+  const updating = audit.managed.filter((r) => r.status === "needs_update");
+  const installing = audit.managed.filter((r) => r.status === "needs_install");
+  const nothingToDo =
+    counts.update === 0 && counts.install === 0 && counts.removeCleanup === 0 && counts.removeRetired === 0 && selectedUnknowns.size === 0;
+
   return (
-    <div className="screen preview">
-      <h2>Review changes</h2>
+    <div className="screen audit">
+      <h2>Mod folder audit</h2>
       <div className="meta">
         <div>
           <span className="label">Modpack</span>
@@ -366,131 +372,175 @@ function PreviewScreen({
         <div className="meta-path">
           <span className="label">Mods folder</span>
           <span className="value path">{modsDir}</span>
-          <button className="link-button inline" onClick={onChangeFolder}>
-            change
-          </button>
+          <button className="link-button inline" onClick={onChangeFolder}>change</button>
         </div>
       </div>
 
-      <div className="diff">
-        <section className="diff-section install">
-          <div className="diff-header">
-            <span className="diff-badge install">{summary.will_install.length}</span>
-            <span>Will install / refresh</span>
-          </div>
-          <ul className="diff-list">
-            {summary.will_install.map((m) => (
-              <li key={m.filename}>
-                <span className="mod-name">{m.name}</span>
-                <span className="mod-file">{m.filename}</span>
+      <div className="audit-grid">
+        {counts.ok > 0 && (
+          <AuditSection title="Already correct" count={counts.ok} variant="ok" defaultOpen={false}>
+            {ok.map((r) => (
+              <li key={r.filename} className="audit-row">
+                <span className="dot dot-ok" />
+                <span className="mod-name">{r.name}</span>
+                <span className="mod-file">{r.filename}</span>
               </li>
             ))}
-          </ul>
-        </section>
-
-        {totalRemove > 0 && (
-          <section className="diff-section remove">
-            <div className="diff-header">
-              <span className="diff-badge remove">{totalRemove}</span>
-              <span>Will remove</span>
-            </div>
-            <ul className="diff-list">
-              {summary.will_remove_cleanup.map((f) => (
-                <li key={`cleanup-${f}`}>
-                  <span className="mod-file">{f}</span>
-                  <span className="reason">retired / replaced</span>
-                </li>
-              ))}
-              {summary.will_remove_orphaned.map((f) => (
-                <li key={`orphan-${f}`}>
-                  <span className="mod-file">{f}</span>
-                  <span className="reason">no longer in manifest</span>
-                </li>
-              ))}
-            </ul>
-          </section>
+          </AuditSection>
+        )}
+        {counts.update > 0 && (
+          <AuditSection title="Will update (wrong size)" count={counts.update} variant="update" defaultOpen>
+            {updating.map((r) => (
+              <li key={r.filename} className="audit-row">
+                <span className="dot dot-update" />
+                <span className="mod-name">{r.name}</span>
+                <span className="mod-file">{r.filename}</span>
+                <span className="size-info">{formatBytes(r.actual_size ?? 0)} → {formatBytes(r.expected_size)}</span>
+              </li>
+            ))}
+          </AuditSection>
+        )}
+        {counts.install > 0 && (
+          <AuditSection title="Will install (missing)" count={counts.install} variant="install" defaultOpen>
+            {installing.map((r) => (
+              <li key={r.filename} className="audit-row">
+                <span className="dot dot-install" />
+                <span className="mod-name">{r.name}</span>
+                <span className="mod-file">{r.filename}</span>
+                <span className="size-info">{formatBytes(r.expected_size)}</span>
+              </li>
+            ))}
+          </AuditSection>
+        )}
+        {(counts.removeCleanup > 0 || counts.removeRetired > 0) && (
+          <AuditSection
+            title="Will remove (retired or replaced)"
+            count={counts.removeCleanup + counts.removeRetired}
+            variant="remove"
+            defaultOpen
+          >
+            {audit.will_remove_cleanup.map((f) => (
+              <li key={`c-${f}`} className="audit-row">
+                <span className="dot dot-remove" />
+                <span className="mod-file">{f}</span>
+                <span className="reason">retired / replaced</span>
+              </li>
+            ))}
+            {audit.will_remove_retired.map((f) => (
+              <li key={`r-${f}`} className="audit-row">
+                <span className="dot dot-remove" />
+                <span className="mod-file">{f}</span>
+                <span className="reason">no longer in manifest</span>
+              </li>
+            ))}
+          </AuditSection>
+        )}
+        {counts.unknown > 0 && (
+          <AuditSection
+            title="Unknown jars in folder"
+            count={counts.unknown}
+            variant="unknown"
+            defaultOpen
+            note="Probably part of the base modpack or your own additions. Check a box to delete that one."
+          >
+            {audit.unknown_jars.map((u) => (
+              <li key={u.filename} className="audit-row interactive">
+                <label className="check-row">
+                  <input
+                    type="checkbox"
+                    checked={selectedUnknowns.has(u.filename)}
+                    onChange={() => toggleUnknown(u.filename)}
+                  />
+                  <span className="dot dot-unknown" />
+                  <span className="mod-file">{u.filename}</span>
+                  <span className="size-info">{formatBytes(u.size)}</span>
+                </label>
+              </li>
+            ))}
+          </AuditSection>
         )}
       </div>
 
       <div className="cta">
-        <button className="btn" onClick={onBack}>
-          Cancel
-        </button>
-        <button className="btn primary" onClick={onInstall}>
-          Apply changes
+        <button className="btn" onClick={onBack}>Cancel</button>
+        <button className="btn primary" onClick={onApply} disabled={nothingToDo}>
+          {nothingToDo ? "Nothing to do" : "Apply changes"}
         </button>
       </div>
     </div>
   );
 }
 
-function InstallingScreen({
-  rows,
-  removed,
+function AuditSection({
+  title, count, variant, defaultOpen = true, note, children,
 }: {
-  rows: ModRow[];
-  removed: string[];
+  title: string;
+  count: number;
+  variant: "ok" | "update" | "install" | "remove" | "unknown";
+  defaultOpen?: boolean;
+  note?: string;
+  children: React.ReactNode;
 }) {
-  const completed = rows.filter((r) => r.status === "done" || r.status === "failed").length;
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <section className={`audit-section variant-${variant} ${open ? "open" : "closed"}`}>
+      <button type="button" className="audit-section-head" onClick={() => setOpen((o) => !o)}>
+        <span className={`audit-badge badge-${variant}`}>{count}</span>
+        <span className="audit-title">{title}</span>
+        <span className="audit-chev">{open ? "▾" : "▸"}</span>
+      </button>
+      {open && (
+        <>
+          {note && <p className="audit-note">{note}</p>}
+          <ul className="audit-list">{children}</ul>
+        </>
+      )}
+    </section>
+  );
+}
+
+function InstallingScreen({ rows, removed, skipped }: { rows: LiveRow[]; removed: string[]; skipped: number }) {
+  const completed = rows.filter((r) => r.status === "done" || r.status === "failed" || r.status === "skipped").length;
   const total = rows.length;
   const overall = total > 0 ? (completed / total) * 100 : 0;
+  const active = rows.filter((r) => r.status === "downloading" || r.status === "queued" || r.status === "failed" || r.status === "done");
   return (
     <div className="screen installing">
-      <h2>Installing…</h2>
+      <h2>Applying changes…</h2>
       <div className="overall-progress">
-        <div className="bar">
-          <div className="fill" style={{ width: `${overall}%` }} />
-        </div>
+        <div className="bar"><div className="fill" style={{ width: `${overall}%` }} /></div>
         <div className="overall-label">
-          {completed} / {total} done
+          {completed} / {total} processed{skipped > 0 && ` (${skipped} skipped, already correct)`}
         </div>
       </div>
       {removed.length > 0 && (
-        <div className="removed-banner">
-          Removed {removed.length} retired mod{removed.length === 1 ? "" : "s"}
-        </div>
+        <div className="removed-banner">Removed {removed.length} file{removed.length === 1 ? "" : "s"}</div>
       )}
-      <ul className="mod-rows">
-        {rows.map((r) => (
-          <li key={r.filename} className={`mod-row status-${r.status}`}>
-            <div className="mod-row-head">
-              <span className="mod-row-name">{r.name}</span>
-              <span className="mod-row-status">
-                {r.status === "pending" && "queued"}
-                {r.status === "downloading" &&
-                  (r.total > 0
-                    ? `${formatBytes(r.downloaded)} / ${formatBytes(r.total)}`
-                    : formatBytes(r.downloaded))}
-                {r.status === "done" && `${formatBytes(r.downloaded)} ✓`}
-                {r.status === "failed" && `failed: ${r.error ?? ""}`}
-              </span>
-            </div>
-            <div className="bar small">
-              <div
-                className="fill"
-                style={{
-                  width: `${r.total > 0 ? (r.downloaded / r.total) * 100 : 0}%`,
-                }}
-              />
-            </div>
-          </li>
-        ))}
-      </ul>
+      {active.length > 0 && (
+        <ul className="mod-rows">
+          {active.map((r) => (
+            <li key={r.filename} className={`mod-row status-${r.status}`}>
+              <div className="mod-row-head">
+                <span className="mod-row-name">{r.name}</span>
+                <span className="mod-row-status">
+                  {r.status === "queued" && "queued"}
+                  {r.status === "downloading" && (r.total > 0 ? `${formatBytes(r.downloaded)} / ${formatBytes(r.total)}` : formatBytes(r.downloaded))}
+                  {r.status === "done" && `${formatBytes(r.downloaded)} ✓`}
+                  {r.status === "failed" && `failed: ${r.error ?? ""}`}
+                </span>
+              </div>
+              <div className="bar small">
+                <div className="fill" style={{ width: `${r.total > 0 ? (r.downloaded / r.total) * 100 : 0}%` }} />
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
 
-function DoneScreen({
-  rows,
-  removed,
-  modsDir,
-  onAgain,
-}: {
-  rows: ModRow[];
-  removed: string[];
-  modsDir: string;
-  onAgain: () => void;
-}) {
+function DoneScreen({ rows, removed, skipped, modsDir, onAgain }: { rows: LiveRow[]; removed: string[]; skipped: number; modsDir: string; onAgain: () => void; }) {
   const installed = rows.filter((r) => r.status === "done").length;
   const failed = rows.filter((r) => r.status === "failed").length;
   return (
@@ -498,67 +548,35 @@ function DoneScreen({
       <div className="success-mark">✓</div>
       <h2>All set</h2>
       <p className="summary">
-        Installed <strong>{installed}</strong> mod{installed === 1 ? "" : "s"}
-        {removed.length > 0 && (
-          <>
-            , removed <strong>{removed.length}</strong>
-          </>
-        )}
-        {failed > 0 && (
-          <span className="failed-note">
-            {" "}
-            — {failed} failed (you can re-run to retry)
-          </span>
-        )}
-        .
+        {installed > 0 && (<>Installed/refreshed <strong>{installed}</strong>. </>)}
+        {skipped > 0 && (<>Skipped <strong>{skipped}</strong> already-correct. </>)}
+        {removed.length > 0 && (<>Removed <strong>{removed.length}</strong>. </>)}
+        {failed > 0 && (<span className="failed-note"> {failed} failed — re-run to retry.</span>)}
       </p>
       <div className="server-card">
         <div className="server-label">Connect to</div>
         <div className="server-address-row">
           <code className="server-address">{SERVER_ADDRESS}</code>
-          <button
-            className="btn small"
-            onClick={() => navigator.clipboard.writeText(SERVER_ADDRESS)}
-          >
-            Copy
-          </button>
+          <button className="btn small" onClick={() => navigator.clipboard.writeText(SERVER_ADDRESS)}>Copy</button>
         </div>
-        <p className="hint">
-          Launch <strong>Create: Ultimate Selection 2</strong> in your launcher,
-          add a server with the address above, and you're in.
-        </p>
+        <p className="hint">Launch <strong>Create: Ultimate Selection 2</strong> in your launcher, add a server with the address above, and you&apos;re in.</p>
       </div>
       <div className="cta">
-        <button
-          className="btn"
-          onClick={() => invoke("open_mods_folder", { modsDir })}
-        >
-          Open mods folder
-        </button>
-        <button className="btn primary" onClick={onAgain}>
-          Done
-        </button>
+        <button className="btn" onClick={() => invoke("open_mods_folder", { modsDir })}>Open mods folder</button>
+        <button className="btn primary" onClick={onAgain}>Done</button>
       </div>
     </div>
   );
 }
 
-function ErrorScreen({
-  message,
-  onRetry,
-}: {
-  message: string;
-  onRetry: () => void;
-}) {
+function ErrorScreen({ message, onRetry }: { message: string; onRetry: () => void }) {
   return (
     <div className="screen error">
       <div className="error-mark">!</div>
       <h2>Something went wrong</h2>
       <p className="error-message">{message}</p>
       <div className="cta">
-        <button className="btn primary" onClick={onRetry}>
-          Back to start
-        </button>
+        <button className="btn primary" onClick={onRetry}>Back to start</button>
       </div>
     </div>
   );

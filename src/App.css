@@ -87,7 +87,17 @@ code {
   color: var(--fg-0);
 }
 
-.home .hero { padding: 24px 0; }
+.home .hero { padding: 24px 0; text-align: center; }
+.hero-mark {
+  width: 92px;
+  height: 92px;
+  border-radius: 16px;
+  margin: 0 auto 16px;
+  display: block;
+  box-shadow: 0 8px 28px rgba(0,0,0,0.4);
+}
+.home h1 { text-align: center; }
+.home .lead { text-align: center; max-width: 560px; margin: 0 auto; }
 
 .cta {
   display: flex;
@@ -203,6 +213,115 @@ code {
 .mod-name { color: var(--fg-0); font-weight: 500; }
 .mod-file { color: var(--fg-2); font-family: "Cascadia Code", Consolas, monospace; font-size: 11px; }
 .reason { font-size: 11px; color: var(--warn); text-transform: uppercase; letter-spacing: 0.5px; }
+
+/* Audit screen */
+.audit-grid { display: flex; flex-direction: column; gap: 12px; }
+.audit-section {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  transition: border-color 0.15s;
+}
+.audit-section.variant-ok      { border-left: 3px solid var(--fg-2); }
+.audit-section.variant-update  { border-left: 3px solid var(--warn); }
+.audit-section.variant-install { border-left: 3px solid var(--accent); }
+.audit-section.variant-remove  { border-left: 3px solid var(--danger); }
+.audit-section.variant-unknown { border-left: 3px solid #a78bfa; }
+
+.audit-section-head {
+  width: 100%;
+  background: var(--bg-2);
+  border: none;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  color: var(--fg-0);
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+}
+.audit-section-head:hover { background: var(--bg-3); }
+.audit-title { flex: 1; }
+.audit-chev { font-size: 12px; color: var(--fg-2); }
+
+.audit-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 22px;
+  border-radius: 11px;
+  padding: 0 7px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.badge-ok      { background: rgba(125,138,168,0.15); color: var(--fg-2); }
+.badge-update  { background: rgba(240,184,64,0.15);  color: var(--warn); }
+.badge-install { background: var(--accent-soft);    color: var(--accent); }
+.badge-remove  { background: var(--danger-soft);    color: var(--danger); }
+.badge-unknown { background: rgba(167,139,250,0.15); color: #a78bfa; }
+
+.audit-note {
+  padding: 8px 16px 0;
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg-2);
+}
+
+.audit-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.audit-row {
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--bg-2);
+  font-size: 13px;
+}
+.audit-row:last-child { border-bottom: none; }
+.audit-row .mod-name { flex: 0 0 auto; min-width: 140px; font-weight: 500; }
+.audit-row .mod-file { color: var(--fg-2); font-family: "Cascadia Code", Consolas, monospace; font-size: 11px; flex: 1; }
+.audit-row .size-info { font-size: 11px; color: var(--fg-2); font-family: "Cascadia Code", Consolas, monospace; }
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.dot-ok      { background: var(--fg-2); }
+.dot-update  { background: var(--warn); }
+.dot-install { background: var(--accent); }
+.dot-remove  { background: var(--danger); }
+.dot-unknown { background: #a78bfa; }
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  cursor: pointer;
+}
+.check-row input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--danger);
+  cursor: pointer;
+}
+.audit-row.interactive:hover { background: rgba(255,255,255,0.02); }
+.mod-row.status-skipped {
+  opacity: 0.6;
+  border-color: var(--bg-3);
+}
+.mod-row.status-skipped .mod-row-status { color: var(--fg-2); }
 
 .overall-progress { display: flex; flex-direction: column; gap: 6px; }
 .overall-label { font-size: 12px; color: var(--fg-2); text-align: right; }

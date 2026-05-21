@@ -2,7 +2,7 @@ mod installer;
 mod manifest;
 mod modpack;
 
-use installer::{InstallProgress, InstallSummary};
+use installer::{InstallProgress, InstallSummary, ModAudit};
 use manifest::Manifest;
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter};
@@ -30,15 +30,24 @@ async fn plan_install(mods_dir: String, manifest: Manifest) -> Result<InstallSum
 }
 
 #[tauri::command]
+async fn audit_mods_dir(mods_dir: String, manifest: Manifest) -> Result<ModAudit, String> {
+    installer::audit(&PathBuf::from(mods_dir), &manifest).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn run_install(
     app: AppHandle,
     mods_dir: String,
     manifest: Manifest,
+    skip_filenames: Vec<String>,
+    also_delete: Vec<String>,
 ) -> Result<(), String> {
     let app_clone = app.clone();
     installer::run(
         &PathBuf::from(mods_dir),
         &manifest,
+        skip_filenames,
+        also_delete,
         move |progress: InstallProgress| {
             let _ = app_clone.emit("install-progress", &progress);
         },
