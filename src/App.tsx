@@ -279,7 +279,7 @@ function Header() {
 function Footer() {
   return (
     <footer className="footer">
-      <span className="footer-text">v0.2.1</span>
+      <span className="footer-text">v0.2.2</span>
       <button className="link-button" onClick={() => openUrl("https://hitnmis.gg")}>hitnmis.gg</button>
     </footer>
   );
@@ -437,11 +437,11 @@ function AuditScreen({
         )}
         {counts.unknown > 0 && (
           <AuditSection
-            title="Unknown jars in folder"
+            title="Other mods in folder (base modpack)"
             count={counts.unknown}
             variant="unknown"
-            defaultOpen
-            note="Probably part of the base modpack or your own additions. Check a box to delete that one."
+            defaultOpen={false}
+            note="These are the mods that ship with Create: Ultimate Selection 2. We don't touch them. Only tick a box if you specifically want to remove that one jar from your folder."
           >
             {audit.unknown_jars.map((u) => (
               <li key={u.filename} className="audit-row interactive">

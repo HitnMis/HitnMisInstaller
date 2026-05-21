@@ -227,7 +227,7 @@ code {
 .audit-section.variant-update  { border-left: 3px solid var(--warn); }
 .audit-section.variant-install { border-left: 3px solid var(--accent); }
 .audit-section.variant-remove  { border-left: 3px solid var(--danger); }
-.audit-section.variant-unknown { border-left: 3px solid #a78bfa; }
+.audit-section.variant-unknown { border-left: 3px solid var(--fg-2); }
 
 .audit-section-head {
   width: 100%;
@@ -262,7 +262,7 @@ code {
 .badge-update  { background: rgba(240,184,64,0.15);  color: var(--warn); }
 .badge-install { background: var(--accent-soft);    color: var(--accent); }
 .badge-remove  { background: var(--danger-soft);    color: var(--danger); }
-.badge-unknown { background: rgba(167,139,250,0.15); color: #a78bfa; }
+.badge-unknown { background: rgba(125,138,168,0.18); color: var(--fg-1); }
 
 .audit-note {
   padding: 8px 16px 0;
@@ -301,7 +301,7 @@ code {
 .dot-update  { background: var(--warn); }
 .dot-install { background: var(--accent); }
 .dot-remove  { background: var(--danger); }
-.dot-unknown { background: #a78bfa; }
+.dot-unknown { background: var(--fg-2); }
 
 .check-row {
   display: flex;
