@@ -95,6 +95,7 @@ pub fn run() {
             detect_mods_dir,
             validate_mods_dir,
             plan_install,
+            audit_mods_dir,
             run_install,
             open_mods_folder,
         ])

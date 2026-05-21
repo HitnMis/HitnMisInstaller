@@ -279,7 +279,7 @@ function Header() {
 function Footer() {
   return (
     <footer className="footer">
-      <span className="footer-text">v0.2.0</span>
+      <span className="footer-text">v0.2.1</span>
       <button className="link-button" onClick={() => openUrl("https://hitnmis.gg")}>hitnmis.gg</button>
     </footer>
   );
