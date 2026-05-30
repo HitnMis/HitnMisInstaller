@@ -82,6 +82,21 @@ async fn open_mods_folder(mods_dir: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+async fn launch_curseforge() -> Result<(), String> {
+    // CurseForge registers the `curseforge://` protocol when installed; opening it
+    // launches/focuses the app so the player can hit Play on their instance.
+    // (CurseForge has no supported way to boot a specific instance directly.)
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", "curseforge://"])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -99,6 +114,7 @@ pub fn run() {
             audit_mods_dir,
             run_install,
             open_mods_folder,
+            launch_curseforge,
         ])
         .setup(|_app| Ok(()))
         .run(tauri::generate_context!())

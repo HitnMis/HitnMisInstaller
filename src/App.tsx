@@ -325,7 +325,7 @@ function Header() {
 function Footer() {
   return (
     <footer className="footer">
-      <span className="footer-text">v0.3.1</span>
+      <span className="footer-text">v0.3.2</span>
       <button className="link-button" onClick={() => openUrl("https://hitnmis.gg")}>hitnmis.gg</button>
     </footer>
   );
@@ -630,7 +630,8 @@ function DoneScreen({ rows, removed, skipped, modsDir, onAgain }: { rows: LiveRo
       </div>
       <div className="cta">
         <button className="btn" onClick={() => invoke("open_mods_folder", { modsDir })}>Open mods folder</button>
-        <button className="btn primary" onClick={onAgain}>Done</button>
+        <button className="btn" onClick={onAgain}>Done</button>
+        <button className="btn primary" onClick={() => { invoke("launch_curseforge").catch(() => {}); }}>🚀 Launch CurseForge</button>
       </div>
     </div>
   );
