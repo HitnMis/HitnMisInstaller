@@ -1,7 +1,7 @@
 {
   "name": "hitnmis-installer",
   "private": true,
-  "version": "0.3.2",
+  "version": "0.3.3",
   "type": "module",
   "description": "HitnMis Modpack Installer — adds the Ascendancy server-side extras to your Create: Ultimate Selection 2 install.",
   "scripts": {

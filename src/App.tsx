@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { check } from "@tauri-apps/plugin-updater";
+import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import heartLogo from "./assets/heart.png";
 import "./App.css";
@@ -46,7 +46,7 @@ type ProgressEvent =
   | { kind: "download_failed"; filename: string; error: string }
   | { kind: "finished"; installed: number; skipped: number; removed: number };
 
-type Screen = "updating" | "home" | "detect" | "audit" | "installing" | "done" | "error";
+type Screen = "update-available" | "updating" | "home" | "detect" | "audit" | "installing" | "done" | "error";
 
 type UpdateInfo = { version: string; downloaded: number; total: number };
 
@@ -74,38 +74,21 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const pendingUpdate = useRef<Update | null>(null);
 
   // On launch, check GitHub Releases for a newer installer build. If one exists,
-  // download + install it and relaunch — no manual re-download. Any failure
-  // (offline, dev build, no release yet) is non-fatal: we just fall through to
-  // the normal home screen. Mod-list updates are separate (fetched at runtime).
+  // PROMPT the user (don't auto-install) — they choose Update now or Later. Any
+  // failure (offline, dev build, no release yet) is non-fatal: fall through to home.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const update = await check();
         if (!update || cancelled) return;
+        pendingUpdate.current = update;
         setUpdateInfo({ version: update.version, downloaded: 0, total: 0 });
-        setScreen("updating");
-        let downloaded = 0;
-        let total = 0;
-        await update.downloadAndInstall((event) => {
-          switch (event.event) {
-            case "Started":
-              total = event.data.contentLength ?? 0;
-              setUpdateInfo((u) => (u ? { ...u, total } : u));
-              break;
-            case "Progress":
-              downloaded += event.data.chunkLength;
-              setUpdateInfo((u) => (u ? { ...u, downloaded } : u));
-              break;
-            case "Finished":
-              break;
-          }
-        });
-        await relaunch();
+        setScreen("update-available");
       } catch (e) {
-        // Non-fatal — continue into the installer as normal.
         console.warn("update check skipped:", e);
         if (!cancelled) setScreen("home");
       }
@@ -114,6 +97,36 @@ export default function App() {
       cancelled = true;
     };
   }, []);
+
+  // Triggered by the user pressing "Update now" on the update-available prompt.
+  async function runUpdate() {
+    const update = pendingUpdate.current;
+    if (!update) return;
+    setScreen("updating");
+    let downloaded = 0;
+    let total = 0;
+    try {
+      await update.downloadAndInstall((event) => {
+        switch (event.event) {
+          case "Started":
+            total = event.data.contentLength ?? 0;
+            setUpdateInfo((u) => (u ? { ...u, total } : u));
+            break;
+          case "Progress":
+            downloaded += event.data.chunkLength;
+            setUpdateInfo((u) => (u ? { ...u, downloaded } : u));
+            break;
+          case "Finished":
+            break;
+        }
+      });
+      await relaunch();
+    } catch (e) {
+      // If the update fails, don't trap the user — let them keep using this version.
+      console.warn("update failed:", e);
+      setScreen("home");
+    }
+  }
 
   useEffect(() => {
     let unlisten: UnlistenFn | null = null;
@@ -282,6 +295,9 @@ export default function App() {
     <div className="app">
       <Header />
       <main className="content">
+        {screen === "update-available" && updateInfo && (
+          <UpdateAvailableScreen info={updateInfo} onUpdate={runUpdate} onLater={() => setScreen("home")} />
+        )}
         {screen === "updating" && updateInfo && <UpdatingScreen info={updateInfo} />}
         {screen === "home" && <HomeScreen onStart={startFlow} busy={busy} />}
         {screen === "detect" && <DetectScreen onPick={pickFolder} onRetry={startFlow} busy={busy} />}
@@ -325,9 +341,30 @@ function Header() {
 function Footer() {
   return (
     <footer className="footer">
-      <span className="footer-text">v0.3.2</span>
+      <span className="footer-text">v0.3.3</span>
       <button className="link-button" onClick={() => openUrl("https://hitnmis.gg")}>hitnmis.gg</button>
     </footer>
+  );
+}
+
+function UpdateAvailableScreen({ info, onUpdate, onLater }: { info: UpdateInfo; onUpdate: () => void; onLater: () => void }) {
+  return (
+    <div className="screen">
+      <div className="hero">
+        <img src={heartLogo} alt="" className="hero-mark" />
+        <h1>Update available</h1>
+        <p className="lead">
+          A new version of the installer (<strong>v{info.version}</strong>) is ready. Updating gets you the latest fixes and mod list.
+        </p>
+        <p className="lead muted">
+          It&apos;ll download the update and restart the app — just a few seconds.
+        </p>
+      </div>
+      <div className="cta">
+        <button className="btn" onClick={onLater}>Later</button>
+        <button className="btn primary large" onClick={onUpdate}>Update now</button>
+      </div>
+    </div>
   );
 }
 
@@ -531,7 +568,7 @@ function AuditScreen({
       <div className="cta">
         <button className="btn" onClick={onBack}>Cancel</button>
         <button className="btn primary" onClick={onApply} disabled={nothingToDo}>
-          {nothingToDo ? "Nothing to do" : "Apply changes"}
+          {nothingToDo ? "Already up to date" : "Apply changes"}
         </button>
       </div>
     </div>
