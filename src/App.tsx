@@ -3,6 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { check } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import heartLogo from "./assets/heart.png";
 import "./App.css";
 
@@ -44,7 +46,9 @@ type ProgressEvent =
   | { kind: "download_failed"; filename: string; error: string }
   | { kind: "finished"; installed: number; skipped: number; removed: number };
 
-type Screen = "home" | "detect" | "audit" | "installing" | "done" | "error";
+type Screen = "updating" | "home" | "detect" | "audit" | "installing" | "done" | "error";
+
+type UpdateInfo = { version: string; downloaded: number; total: number };
 
 type LiveRowStatus = "queued" | "skipped" | "downloading" | "done" | "failed";
 type LiveRow = {
@@ -69,6 +73,47 @@ export default function App() {
   const [skippedCount, setSkippedCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+
+  // On launch, check GitHub Releases for a newer installer build. If one exists,
+  // download + install it and relaunch — no manual re-download. Any failure
+  // (offline, dev build, no release yet) is non-fatal: we just fall through to
+  // the normal home screen. Mod-list updates are separate (fetched at runtime).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const update = await check();
+        if (!update || cancelled) return;
+        setUpdateInfo({ version: update.version, downloaded: 0, total: 0 });
+        setScreen("updating");
+        let downloaded = 0;
+        let total = 0;
+        await update.downloadAndInstall((event) => {
+          switch (event.event) {
+            case "Started":
+              total = event.data.contentLength ?? 0;
+              setUpdateInfo((u) => (u ? { ...u, total } : u));
+              break;
+            case "Progress":
+              downloaded += event.data.chunkLength;
+              setUpdateInfo((u) => (u ? { ...u, downloaded } : u));
+              break;
+            case "Finished":
+              break;
+          }
+        });
+        await relaunch();
+      } catch (e) {
+        // Non-fatal — continue into the installer as normal.
+        console.warn("update check skipped:", e);
+        if (!cancelled) setScreen("home");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let unlisten: UnlistenFn | null = null;
@@ -237,6 +282,7 @@ export default function App() {
     <div className="app">
       <Header />
       <main className="content">
+        {screen === "updating" && updateInfo && <UpdatingScreen info={updateInfo} />}
         {screen === "home" && <HomeScreen onStart={startFlow} busy={busy} />}
         {screen === "detect" && <DetectScreen onPick={pickFolder} onRetry={startFlow} busy={busy} />}
         {screen === "audit" && manifest && audit && modsDir && (
@@ -282,6 +328,27 @@ function Footer() {
       <span className="footer-text">v0.2.2</span>
       <button className="link-button" onClick={() => openUrl("https://hitnmis.gg")}>hitnmis.gg</button>
     </footer>
+  );
+}
+
+function UpdatingScreen({ info }: { info: UpdateInfo }) {
+  const pct = info.total > 0 ? Math.round((info.downloaded / info.total) * 100) : 0;
+  return (
+    <div className="screen installing">
+      <h2>Updating installer…</h2>
+      <p className="lead muted">
+        A newer version (<strong>v{info.version}</strong>) is available. Downloading it now —
+        the app will restart automatically when it&apos;s done.
+      </p>
+      <div className="overall-progress">
+        <div className="bar"><div className="fill" style={{ width: `${pct}%` }} /></div>
+        <div className="overall-label">
+          {info.total > 0
+            ? `${formatBytes(info.downloaded)} / ${formatBytes(info.total)} (${pct}%)`
+            : "Starting download…"}
+        </div>
+      </div>
+    </div>
   );
 }
 
