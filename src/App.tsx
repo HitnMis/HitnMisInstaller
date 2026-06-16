@@ -32,6 +32,8 @@ type ModAudit = {
   managed: ManagedRow[];
   will_remove_cleanup: string[];
   will_remove_retired: string[];
+  blocked_jars: UnknownJar[];
+  foreign_jars: UnknownJar[];
   unknown_jars: UnknownJar[];
   previously_managed: string[];
 };
@@ -201,7 +203,7 @@ export default function App() {
         setModsDir(detected);
         const a = await invoke<ModAudit>("audit_mods_dir", { modsDir: detected, manifest: m });
         setAudit(a);
-        setSelectedUnknowns(new Set());
+        setSelectedUnknowns(new Set(a.blocked_jars.map((j) => j.filename)));
         setScreen("audit");
       } else {
         setScreen("detect");
@@ -228,7 +230,7 @@ export default function App() {
       if (manifest) {
         const a = await invoke<ModAudit>("audit_mods_dir", { modsDir: picked, manifest });
         setAudit(a);
-        setSelectedUnknowns(new Set());
+        setSelectedUnknowns(new Set(a.blocked_jars.map((j) => j.filename)));
         setScreen("audit");
       }
     } catch (e) {
@@ -341,7 +343,7 @@ function Header() {
 function Footer() {
   return (
     <footer className="footer">
-      <span className="footer-text">v0.3.3</span>
+      <span className="footer-text">v0.3.4</span>
       <button className="link-button" onClick={() => openUrl("https://hitnmis.gg")}>hitnmis.gg</button>
     </footer>
   );
@@ -451,6 +453,8 @@ function AuditScreen({
       install,
       removeRetired: audit.will_remove_retired.length,
       removeCleanup: audit.will_remove_cleanup.length,
+      blocked: audit.blocked_jars.length,
+      foreign: audit.foreign_jars.length,
       unknown: audit.unknown_jars.length,
     };
   }, [audit]);
@@ -481,6 +485,54 @@ function AuditScreen({
       </div>
 
       <div className="audit-grid">
+        {counts.blocked > 0 && (
+          <AuditSection
+            title="Will stop you connecting — remove these"
+            count={counts.blocked}
+            variant="remove"
+            defaultOpen
+            note="These mods aren't part of the pack and the server doesn't have them, so they cause the &quot;Connection Lost: channel missing on the server side&quot; error. They're ticked for removal — leave them ticked and hit Apply to fix your connection."
+          >
+            {audit.blocked_jars.map((u) => (
+              <li key={u.filename} className="audit-row interactive">
+                <label className="check-row">
+                  <input
+                    type="checkbox"
+                    checked={selectedUnknowns.has(u.filename)}
+                    onChange={() => toggleUnknown(u.filename)}
+                  />
+                  <span className="dot dot-remove" />
+                  <span className="mod-file">{u.filename}</span>
+                  <span className="size-info">{formatBytes(u.size)}</span>
+                </label>
+              </li>
+            ))}
+          </AuditSection>
+        )}
+        {counts.foreign > 0 && (
+          <AuditSection
+            title="Not part of the pack — review"
+            count={counts.foreign}
+            variant="update"
+            defaultOpen
+            note="These jars aren't in the pack or our extras. Some may be harmless client-only mods you added (minimaps, shaders, FPS). If you can't connect, tick the ones to remove. Not ticked by default."
+          >
+            {audit.foreign_jars.map((u) => (
+              <li key={u.filename} className="audit-row interactive">
+                <label className="check-row">
+                  <input
+                    type="checkbox"
+                    checked={selectedUnknowns.has(u.filename)}
+                    onChange={() => toggleUnknown(u.filename)}
+                  />
+                  <span className="dot dot-update" />
+                  <span className="mod-file">{u.filename}</span>
+                  <span className="size-info">{formatBytes(u.size)}</span>
+                </label>
+              </li>
+            ))}
+          </AuditSection>
+        )}
         {counts.ok > 0 && (
           <AuditSection title="Already correct" count={counts.ok} variant="ok" defaultOpen={false}>
             {ok.map((r) => (

@@ -43,8 +43,49 @@ pub struct ModAudit {
     pub managed: Vec<ManagedRow>,
     pub will_remove_cleanup: Vec<String>,
     pub will_remove_retired: Vec<String>,
+    /// Known-bad jars (matched a `foreign_mods.block` glob) — these stop you
+    /// connecting to the server. Recommended for removal, pre-selected in the UI.
+    pub blocked_jars: Vec<UnknownJar>,
+    /// Jars not in the base-pack allowlist (`foreign_mods.expected`) and not
+    /// explicitly allowed. Only populated when an allowlist is published.
+    pub foreign_jars: Vec<UnknownJar>,
+    /// Everything else in the folder (the base modpack — left untouched).
     pub unknown_jars: Vec<UnknownJar>,
     pub previously_managed: Vec<String>,
+}
+
+/// Case-insensitive wildcard match. Supports `*` (any run, incl. empty); every
+/// other char is literal. Enough for the globs we ship (e.g. "ritchies*.jar").
+fn glob_match(pattern: &str, name: &str) -> bool {
+    let pat: Vec<char> = pattern.to_ascii_lowercase().chars().collect();
+    let txt: Vec<char> = name.to_ascii_lowercase().chars().collect();
+    // classic two-pointer wildcard matcher with backtracking on '*'
+    let (mut p, mut t) = (0usize, 0usize);
+    let (mut star, mut mark) = (None::<usize>, 0usize);
+    while t < txt.len() {
+        if p < pat.len() && pat[p] != '*' && pat[p] == txt[t] {
+            p += 1;
+            t += 1;
+        } else if p < pat.len() && pat[p] == '*' {
+            star = Some(p);
+            mark = t;
+            p += 1;
+        } else if let Some(sp) = star {
+            p = sp + 1;
+            mark += 1;
+            t = mark;
+        } else {
+            return false;
+        }
+    }
+    while p < pat.len() && pat[p] == '*' {
+        p += 1;
+    }
+    p == pat.len()
+}
+
+fn matches_any(globs: &[String], name: &str) -> bool {
+    globs.iter().any(|g| glob_match(g, name))
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -173,6 +214,15 @@ pub fn audit(mods_dir: &Path, manifest: &Manifest) -> anyhow::Result<ModAudit> {
         known.insert(f.clone());
     }
 
+    // Foreign-mod config (manifest schema v3+). Absent -> empty lists, so every
+    // non-managed jar falls through to unknown_jars exactly like before.
+    let fm = manifest.foreign_mods.clone().unwrap_or_default();
+    let has_allowlist = !fm.expected.is_empty();
+    let expected: std::collections::HashSet<&str> =
+        fm.expected.iter().map(|s| s.as_str()).collect();
+
+    let mut blocked_jars = Vec::new();
+    let mut foreign_jars = Vec::new();
     let mut unknown_jars = Vec::new();
     if let Ok(entries) = std::fs::read_dir(mods_dir) {
         for entry in entries.flatten() {
@@ -188,18 +238,29 @@ pub fn audit(mods_dir: &Path, manifest: &Manifest) -> anyhow::Result<ModAudit> {
                 continue;
             }
             let size = path.metadata().map(|m| m.len()).unwrap_or(0);
-            unknown_jars.push(UnknownJar {
-                filename: name.to_string(),
-                size,
-            });
+            let jar = UnknownJar { filename: name.to_string(), size };
+            // 1) known-bad glob -> always flagged as blocked
+            if matches_any(&fm.block, name) {
+                blocked_jars.push(jar);
+            // 2) with an allowlist, anything not expected and not allowed is foreign
+            } else if has_allowlist && !expected.contains(name) && !matches_any(&fm.allow, name) {
+                foreign_jars.push(jar);
+            // 3) otherwise it's part of the base modpack (left untouched)
+            } else {
+                unknown_jars.push(jar);
+            }
         }
     }
+    blocked_jars.sort_by(|a, b| a.filename.cmp(&b.filename));
+    foreign_jars.sort_by(|a, b| a.filename.cmp(&b.filename));
     unknown_jars.sort_by(|a, b| a.filename.cmp(&b.filename));
 
     Ok(ModAudit {
         managed,
         will_remove_cleanup,
         will_remove_retired,
+        blocked_jars,
+        foreign_jars,
         unknown_jars,
         previously_managed,
     })
