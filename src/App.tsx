@@ -282,6 +282,28 @@ export default function App() {
     });
   }
 
+  // Nothing to install/remove — jump straight to the connect/launch screen
+  // instead of dead-ending on a disabled "Already up to date" button.
+  function continueToDone() {
+    if (!manifest || !audit) return;
+    setRows(
+      manifest.mods.map((m) => {
+        const a = audit.managed.find((row) => row.filename === m.filename);
+        const isOk = a?.status === "ok";
+        return {
+          name: m.name,
+          filename: m.filename,
+          status: isOk ? "skipped" : "queued",
+          downloaded: isOk ? m.size : 0,
+          total: m.size,
+        } as LiveRow;
+      })
+    );
+    setRemoved([]);
+    setSkippedCount(audit.managed.filter((r) => r.status === "ok").length);
+    setScreen("done");
+  }
+
   function resetToHome() {
     setScreen("home");
     setManifest(null);
@@ -311,6 +333,7 @@ export default function App() {
             selectedUnknowns={selectedUnknowns}
             toggleUnknown={toggleUnknown}
             onApply={startInstall}
+            onContinue={continueToDone}
             onBack={resetToHome}
             onChangeFolder={pickFolder}
           />
@@ -343,7 +366,7 @@ function Header() {
 function Footer() {
   return (
     <footer className="footer">
-      <span className="footer-text">v0.3.4</span>
+      <span className="footer-text">v0.3.5</span>
       <button className="link-button" onClick={() => openUrl("https://hitnmis.gg")}>hitnmis.gg</button>
     </footer>
   );
@@ -432,7 +455,7 @@ function DetectScreen({ onPick, onRetry, busy }: { onPick: () => void; onRetry: 
 }
 
 function AuditScreen({
-  manifest, audit, modsDir, selectedUnknowns, toggleUnknown, onApply, onBack, onChangeFolder,
+  manifest, audit, modsDir, selectedUnknowns, toggleUnknown, onApply, onContinue, onBack, onChangeFolder,
 }: {
   manifest: Manifest;
   audit: ModAudit;
@@ -440,6 +463,7 @@ function AuditScreen({
   selectedUnknowns: Set<string>;
   toggleUnknown: (filename: string) => void;
   onApply: () => void;
+  onContinue: () => void;
   onBack: () => void;
   onChangeFolder: () => void;
 }) {
@@ -619,8 +643,8 @@ function AuditScreen({
 
       <div className="cta">
         <button className="btn" onClick={onBack}>Cancel</button>
-        <button className="btn primary" onClick={onApply} disabled={nothingToDo}>
-          {nothingToDo ? "Already up to date" : "Apply changes"}
+        <button className="btn primary" onClick={nothingToDo ? onContinue : onApply}>
+          {nothingToDo ? "Continue →" : "Apply changes"}
         </button>
       </div>
     </div>
